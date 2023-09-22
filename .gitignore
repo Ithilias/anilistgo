@@ -1,0 +1,28 @@
+# Binaries, object files, etc.
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/bin/
+
+# Folders
+_obj
+_test
+vendor/
+
+# Dependency directories
+Godeps/
+
+# IDE/Editor folders
+.vscode/
+.idea/
+
+# OS-specific files
+.DS_Store
+desktop.ini
+*.swp
+*~
+Thumbs.db
