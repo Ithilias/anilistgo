@@ -44,3 +44,17 @@ func TestGetAnilistURLAndScore(t *testing.T) {
 		}
 	}
 }
+
+func TestGetFollowingNames(t *testing.T) {
+	result, _ := GetFollowingNames("Ithilias")
+	if len(result) == 0 {
+		t.Errorf("expected result but got empty array %v", result)
+	}
+}
+
+func TestGetUpdates(t *testing.T) {
+	result, _ := GetUpdates("Ithilias", MediaTypeAnime)
+	if len(result) == 0 {
+		t.Errorf("expected result but got empty array %v", result)
+	}
+}
