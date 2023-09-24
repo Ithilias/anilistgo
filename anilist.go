@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -328,7 +329,7 @@ func GetUpdates(username string, mediaType string) ([]Update, error) {
 				UserName:    username,
 				MediaID:     entry.MediaID,
 				Title:       entry.Media.Title.English,
-				URL:         fmt.Sprintf(AnilistURLFormat, mediaType, entry.MediaID),
+				URL:         fmt.Sprintf(AnilistURLFormat, strings.ToLower(mediaType), entry.MediaID),
 				CoverURL:    entry.Media.CoverImage.Large,
 				Status:      entry.Status,
 				UpdatedTime: entry.UpdatedAt,
