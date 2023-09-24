@@ -133,8 +133,8 @@ type MediaListCollection struct {
 		Entries []struct {
 			MediaID         int    `json:"mediaId"`
 			Score           int    `json:"score"`
-			Progress        int    `json:"progress"`
-			ProgressVolumes int    `json:"progressVolumes"`
+			Progress        *int   `json:"progress"`
+			ProgressVolumes *int   `json:"progressVolumes"`
 			Status          string `json:"status"`
 			UpdatedAt       int64  `json:"updatedAt"`
 			Media           struct {
@@ -342,11 +342,11 @@ func GetUpdates(username string, mediaType string) ([]Update, error) {
 			}
 
 			if mediaType == MediaTypeAnime {
-				update.Progress = &entry.Progress
+				update.Progress = entry.Progress
 				update.TotalEpisodes = entry.Media.Episodes
 			} else if mediaType == MediaTypeManga {
-				update.Progress = &entry.Progress
-				update.ProgressVol = &entry.ProgressVolumes
+				update.Progress = entry.Progress
+				update.ProgressVol = entry.ProgressVolumes
 				update.TotalVolumes = entry.Media.Volumes
 				update.TotalChapters = entry.Media.Chapters
 			}
