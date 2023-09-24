@@ -77,6 +77,9 @@ const (
 							english
 							romaji
 						}
+                        coverImage {
+                            large
+                        }
 						episodes
 						chapters
 						volumes
@@ -138,6 +141,9 @@ type MediaListCollection struct {
 					English string `json:"english"`
 					Romaji  string `json:"romaji"`
 				} `json:"title"`
+				CoverImage struct {
+					Large string `json:"large"`
+				}
 				Episodes *int `json:"episodes"`
 				Chapters *int `json:"chapters"`
 				Volumes  *int `json:"volumes"`
@@ -164,6 +170,7 @@ type Update struct {
 	MediaID       int
 	Title         string
 	URL           string
+	CoverURL      string
 	Status        string
 	UpdatedTime   int64
 	Score         float32
@@ -322,6 +329,7 @@ func GetUpdates(username string, mediaType string) ([]Update, error) {
 				MediaID:     entry.MediaID,
 				Title:       entry.Media.Title.English,
 				URL:         fmt.Sprintf(AnilistURLFormat, mediaType, entry.MediaID),
+				CoverURL:    entry.Media.CoverImage.Large,
 				Status:      entry.Status,
 				UpdatedTime: entry.UpdatedAt,
 				Score:       entry.Score,
