@@ -85,7 +85,7 @@ const (
 						chapters
 						volumes
 					}
-					score
+					score (format: POINT_100)
 					progress
 					progressVolumes
 					status
@@ -131,12 +131,12 @@ type Response struct {
 type MediaListCollection struct {
 	Lists []struct {
 		Entries []struct {
-			MediaID         int     `json:"mediaId"`
-			Score           float32 `json:"score"`
-			Progress        int     `json:"progress"`
-			ProgressVolumes int     `json:"progressVolumes"`
-			Status          string  `json:"status"`
-			UpdatedAt       int64   `json:"updatedAt"`
+			MediaID         int    `json:"mediaId"`
+			Score           int    `json:"score"`
+			Progress        int    `json:"progress"`
+			ProgressVolumes int    `json:"progressVolumes"`
+			Status          string `json:"status"`
+			UpdatedAt       int64  `json:"updatedAt"`
 			Media           struct {
 				Title struct {
 					English string `json:"english"`
@@ -174,7 +174,7 @@ type Update struct {
 	CoverURL      string
 	Status        string
 	UpdatedTime   int64
-	Score         float32
+	Score         int
 	Progress      *int
 	ProgressVol   *int
 	TotalEpisodes *int
