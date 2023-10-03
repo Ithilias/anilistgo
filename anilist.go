@@ -95,6 +95,16 @@ const (
 		}
 	}
     `
+
+	UpdateProgressQuery = `
+    mutation ($mediaId: Int, $progress: Int, $status: MediaListStatus) {
+      SaveMediaListEntry (mediaId: $mediaId, progress: $progress, status: $status) {
+        id
+        progress
+        status
+      }
+    }
+    `
 )
 
 var (
@@ -102,6 +112,10 @@ var (
 	BeginningSeasonMonths = []int{1, 4, 7, 10}
 	EndSeasonMonths       = []int{3, 6, 9, 12}
 )
+
+type AuthenticatedAPI struct {
+	AccessToken string
+}
 
 type MediaTitle struct {
 	Romaji  string `json:"romaji"`
@@ -186,6 +200,29 @@ type Update struct {
 type AnilistItem struct {
 	AnilistURL   string
 	AnilistScore int
+}
+
+// NewAuthenticatedAPI creates and returns a new instance of AuthenticatedAPI
+// configured with the provided access token. The returned API object is
+// capable of making authenticated requests to the AniList API, allowing it to
+// interact with user-specific data, such as updating a user's media progress.
+//
+// Parameters:
+//   - accessToken: A string that contains the OAuth2 access token obtained
+//     from AniList. The access token is used to authenticate
+//     requests made to the API.
+//
+// The function returns a pointer to an AuthenticatedAPI instance, configured
+// with the provided access token. This instance should be used to make
+// authenticated API requests on behalf of the user.
+//
+// Usage:
+//
+//	api := NewAuthenticatedAPI("your_access_token")
+func NewAuthenticatedAPI(accessToken string) *AuthenticatedAPI {
+	return &AuthenticatedAPI{
+		AccessToken: accessToken,
+	}
 }
 
 // GetAnilistURLAndScore retrieves the Anilist URL and average score for a given anime title.
@@ -358,6 +395,52 @@ func GetUpdates(username string, mediaType string) ([]Update, error) {
 	return updates, nil
 }
 
+// UpdateProgress updates the progress status of a media item on AniList for
+// the authenticated user.
+//
+// This method performs a GraphQL mutation by making a HTTP POST request to
+// the AniList API, updating the user's progress on a specific media item.
+// Progress and status update can be used for marking media as watched/read,
+// or updating the watching/reading progress of a media item.
+//
+// Parameters:
+//   - mediaID: An integer that uniquely identifies the media item on AniList.
+//   - progress: An integer representing the progress the user has made
+//     with the media item. For series, it is typically the number
+//     of watched episodes or read chapters.
+//   - status: A string indicating the user's watching/reading status for
+//     the media item. This should be a value from the predefined
+//     set of status strings defined by the AniList API, such as
+//     "CURRENT", "PLANNING", "COMPLETED", etc.
+//
+// The method will return an error if the request to the API fails, which
+// could be due to a variety of reasons: network issues, invalid access token,
+// invalid mediaID, or API changes. Otherwise, it returns nil indicating that
+// the progress update was successful.
+//
+// Usage:
+//
+//	api := &AuthenticatedAPI{
+//	    AccessToken: "your_access_token",
+//	}
+//	err := api.UpdateProgress(12345, 7, "CURRENT")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+func (api *AuthenticatedAPI) UpdateProgress(mediaID int, progress int, status string) error {
+	variables := map[string]interface{}{
+		"mediaId":  mediaID,
+		"progress": progress,
+		"status":   status,
+	}
+
+	_, err := sendRequest(BaseAPIURL, UpdateProgressQuery, variables, api.AccessToken)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func computeSeason(firstEpisodeDate time.Time, offset int) (string, int) {
 	seasonIndex := (int(firstEpisodeDate.Month())-1)/3 + offset
 	seasonYear := firstEpisodeDate.Year()
@@ -374,7 +457,7 @@ func computeSeason(firstEpisodeDate time.Time, offset int) (string, int) {
 }
 
 func fetchAnilistData(query string, variables map[string]interface{}) (Media, error) {
-	data, err := sendRequest(BaseAPIURL, query, variables)
+	data, err := sendRequest(BaseAPIURL, query, variables, "")
 	if err != nil {
 		return Media{}, err
 	}
@@ -382,7 +465,7 @@ func fetchAnilistData(query string, variables map[string]interface{}) (Media, er
 }
 
 func fetchUserID(query string, variables map[string]interface{}) (int, error) {
-	data, err := sendRequest(BaseAPIURL, query, variables)
+	data, err := sendRequest(BaseAPIURL, query, variables, "")
 	if err != nil {
 		return 0, err
 	}
@@ -391,7 +474,7 @@ func fetchUserID(query string, variables map[string]interface{}) (int, error) {
 }
 
 func fetchFollowingData(query string, variables map[string]interface{}) (*PageData, error) {
-	data, err := sendRequest(BaseAPIURL, query, variables)
+	data, err := sendRequest(BaseAPIURL, query, variables, "")
 	if err != nil {
 		return nil, err
 	}
@@ -400,7 +483,7 @@ func fetchFollowingData(query string, variables map[string]interface{}) (*PageDa
 }
 
 func fetchUpdatesData(query string, variables map[string]interface{}) (*MediaListCollection, error) {
-	data, err := sendRequest(BaseAPIURL, query, variables)
+	data, err := sendRequest(BaseAPIURL, query, variables, "")
 	if err != nil {
 		return nil, err
 	}
@@ -417,22 +500,36 @@ func isMonthInList(date time.Time, list []int) bool {
 	return false
 }
 
-func sendRequest(url, query string, variables map[string]interface{}) (*Response, error) {
-	reqBody, _ := json.Marshal(map[string]interface{}{
+func sendRequest(url, query string, variables map[string]interface{}, accessToken string) (*Response, error) {
+	reqBody, err := json.Marshal(map[string]interface{}{
 		"query":     query,
 		"variables": variables,
 	})
+	if err != nil {
+		return nil, err
+	}
 
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(reqBody))
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	if accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer func(Body io.ReadCloser) {
-		err = Body.Close()
+		err := Body.Close()
+		if err != nil {
+			panic(err)
+		}
 	}(resp.Body)
-	if err != nil {
-		return nil, err
-	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
