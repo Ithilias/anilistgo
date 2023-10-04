@@ -127,6 +127,12 @@ type Media struct {
 	ID           int        `json:"id"`
 	AverageScore int        `json:"averageScore"`
 	Title        MediaTitle `json:"title"`
+	CoverImage   struct {
+		ExtraLarge string `json:"extraLarge"`
+	}
+	Episodes *int `json:"episodes"`
+	Chapters *int `json:"chapters"`
+	Volumes  *int `json:"volumes"`
 }
 
 type Response struct {
@@ -151,18 +157,7 @@ type MediaListCollection struct {
 			ProgressVolumes *int   `json:"progressVolumes"`
 			Status          string `json:"status"`
 			UpdatedAt       int64  `json:"updatedAt"`
-			Media           struct {
-				Title struct {
-					English string `json:"english"`
-					Romaji  string `json:"romaji"`
-				} `json:"title"`
-				CoverImage struct {
-					ExtraLarge string `json:"extraLarge"`
-				}
-				Episodes *int `json:"episodes"`
-				Chapters *int `json:"chapters"`
-				Volumes  *int `json:"volumes"`
-			} `json:"media"`
+			Media           Media  `json:"media"`
 		} `json:"entries"`
 	} `json:"lists"`
 }
@@ -198,8 +193,10 @@ type Update struct {
 }
 
 type AnilistItem struct {
-	AnilistURL   string
-	AnilistScore int
+	ID       int
+	URL      string
+	Score    int
+	Episodes *int
 }
 
 // NewAuthenticatedAPI creates and returns a new instance of AuthenticatedAPI
@@ -225,7 +222,7 @@ func NewAuthenticatedAPI(accessToken string) *AuthenticatedAPI {
 	}
 }
 
-// GetAnilistURLAndScore retrieves the Anilist URL and average score for a given anime title.
+// FindAnilistItem retrieves the Anilist URL and average score for a given anime title.
 // If a date for the first episode is provided, the function will also consider the season
 // in which the anime aired to refine the search. The function returns an AnilistItem containing
 // the URL and score. If no matching anime is found, an empty AnilistItem and potentially an error
@@ -238,7 +235,7 @@ func NewAuthenticatedAPI(accessToken string) *AuthenticatedAPI {
 // Returns:
 // - AnilistItem: A struct containing the Anilist URL and score for the found anime.
 // - error: Any errors encountered during the search.
-func GetAnilistURLAndScore(title string, firstEpisodeDate *time.Time, offset int) (AnilistItem, error) {
+func FindAnilistItem(title string, firstEpisodeDate *time.Time, offset int) (AnilistItem, error) {
 	var query string
 	var variables map[string]interface{}
 
@@ -266,13 +263,15 @@ func GetAnilistURLAndScore(title string, firstEpisodeDate *time.Time, offset int
 		url := fmt.Sprintf(AnimeURLFormat, media.ID)
 		score := media.AverageScore
 		return AnilistItem{
-			AnilistURL:   url,
-			AnilistScore: score,
+			ID:       media.ID,
+			URL:      url,
+			Score:    score,
+			Episodes: media.Episodes,
 		}, nil
 	} else if firstEpisodeDate != nil && isMonthInList(*firstEpisodeDate, BeginningSeasonMonths) && offset == 0 {
-		return GetAnilistURLAndScore(title, firstEpisodeDate, -1)
+		return FindAnilistItem(title, firstEpisodeDate, -1)
 	} else if firstEpisodeDate != nil && isMonthInList(*firstEpisodeDate, EndSeasonMonths) && offset == 0 {
-		return GetAnilistURLAndScore(title, firstEpisodeDate, 1)
+		return FindAnilistItem(title, firstEpisodeDate, 1)
 	}
 
 	return AnilistItem{}, nil

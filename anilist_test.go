@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func TestGetAnilistURLAndScore(t *testing.T) {
+func TestFindAnilistItem(t *testing.T) {
 	firstEpisodeDateFirstSeasonAoT, _ := time.Parse("2006-01-02", "2013-04-07")
 	firstEpisodeDateLastSeasonAoT, _ := time.Parse("2006-01-02", "2020-12-07")
 	firstEpisodeDate21SeasonOnePiece, _ := time.Parse("2006-01-02", "2021-10-10")
@@ -25,7 +25,7 @@ func TestGetAnilistURLAndScore(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result, err := GetAnilistURLAndScore(tt.title, tt.firstEpisodeDate, tt.offset)
+		result, err := FindAnilistItem(tt.title, tt.firstEpisodeDate, tt.offset)
 
 		if err != nil && !tt.expectError {
 			t.Errorf("expected no error but got: %v", err)
@@ -35,12 +35,12 @@ func TestGetAnilistURLAndScore(t *testing.T) {
 			t.Errorf("expected an error but got none")
 		}
 
-		if result.AnilistURL != tt.expectedURL {
-			t.Errorf("expected URL %v but got %v", tt.expectedURL, result.AnilistURL)
+		if result.URL != tt.expectedURL {
+			t.Errorf("expected URL %v but got %v", tt.expectedURL, result.URL)
 		}
 
-		if tt.expectScore && result.AnilistScore != tt.expectedScore {
-			t.Errorf("expected score %v but got %v", tt.expectedScore, result.AnilistScore)
+		if tt.expectScore && result.Score != tt.expectedScore {
+			t.Errorf("expected score %v but got %v", tt.expectedScore, result.Score)
 		}
 	}
 }
