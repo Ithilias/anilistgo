@@ -27,6 +27,12 @@ const (
                 english
                 native
             }
+			coverImage {
+				extraLarge
+			}
+			episodes
+			chapters
+			volumes
             averageScore
         }
     }
@@ -41,6 +47,12 @@ const (
                 english
                 native
             }
+			coverImage {
+				extraLarge
+			}
+			episodes
+			chapters
+			volumes
             averageScore
         }
     }
@@ -51,6 +63,14 @@ const (
         User (name: $name) {
             id
         }
+    }
+    `
+
+	ProgressQuery = `
+    query ($userName: String, $mediaId: Int) {
+      MediaList (userName: $userName, mediaId: $mediaId) {
+        progress
+      }
     }
     `
 
@@ -138,6 +158,7 @@ type Media struct {
 type Response struct {
 	Data struct {
 		MediaData           Media                `json:"Media"`
+		MediaList           MediaList            `json:"MediaList"`
 		MediaListCollection *MediaListCollection `json:"MediaListCollection"`
 		User                UserInfo             `json:"User,omitempty"`
 		Page                *PageData            `json:"Page,omitempty"`
@@ -146,6 +167,10 @@ type Response struct {
 			Status  int    `json:"status"`
 		} `json:"errors,omitempty"`
 	} `json:"data"`
+}
+
+type MediaList struct {
+	Progress int `json:"progress"`
 }
 
 type MediaListCollection struct {
@@ -440,6 +465,43 @@ func (api *AuthenticatedAPI) UpdateProgress(mediaID int, progress int, status st
 	return nil
 }
 
+// GetProgress retrieves the watching progress of a specific media item for a user
+// from the Anilist API. It queries the Anilist API for the progress of a media item,
+// identified by its mediaID, for a specific user, identified by their userName.
+//
+// Parameters:
+// - userName: A string representing the Anilist user's name whose progress is being fetched.
+// - mediaID: An integer representing the unique identifier of the media item on Anilist.
+//
+// Returns:
+//   - An integer representing the progress of the media item for the user. The progress
+//     is returned as the number of episodes watched. If the progress cannot be fetched
+//     (due to user not watching the media, mediaID not existing, or other reasons),
+//     it returns 0.
+//   - An error which can occur during the API request, JSON parsing, or other stages.
+//     Returns nil if the function runs successfully.
+//
+// Example usage:
+//
+//	progress, err := GetProgress("exampleUser", 12345)
+//	if err != nil {
+//	    fmt.Printf("An error occurred: %v\n", err)
+//	    return
+//	}
+//	fmt.Printf("The progress for mediaID 12345 for exampleUser is: %d\n", progress)
+func GetProgress(userName string, mediaID int) (int, error) {
+	variables := map[string]interface{}{
+		"mediaId":  mediaID,
+		"userName": userName,
+	}
+
+	progress, err := fetchProgress(ProgressQuery, variables)
+	if err != nil {
+		return 0, err
+	}
+	return progress, nil
+}
+
 func computeSeason(firstEpisodeDate time.Time, offset int) (string, int) {
 	seasonIndex := (int(firstEpisodeDate.Month())-1)/3 + offset
 	seasonYear := firstEpisodeDate.Year()
@@ -461,6 +523,14 @@ func fetchAnilistData(query string, variables map[string]interface{}) (Media, er
 		return Media{}, err
 	}
 	return data.Data.MediaData, nil
+}
+
+func fetchProgress(query string, variables map[string]interface{}) (int, error) {
+	data, err := sendRequest(BaseAPIURL, query, variables, "")
+	if err != nil {
+		return 0, err
+	}
+	return data.Data.MediaList.Progress, nil
 }
 
 func fetchUserID(query string, variables map[string]interface{}) (int, error) {
