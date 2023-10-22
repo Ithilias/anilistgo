@@ -38,6 +38,26 @@ const (
     }
     `
 
+	AnimeSearchQueryByID = `
+    query ($id: Int) {
+        Media (id: $id) {
+            id
+            title {
+                romaji
+                english
+                native
+            }
+			coverImage {
+				extraLarge
+			}
+			episodes
+			chapters
+			volumes
+            averageScore
+        }
+    }
+    `
+
 	AnimeSearchQuery = `
     query ($title: String) {
         Media (type: ANIME, search: $title) {
@@ -245,6 +265,39 @@ func NewAuthenticatedAPI(accessToken string) *AuthenticatedAPI {
 	return &AuthenticatedAPI{
 		AccessToken: accessToken,
 	}
+}
+
+// GetAnilistItemByID retrieves the Anilist URL and average score for a given anime ID.
+// The function returns an AnilistItem containing the URL, score, and other relevant data.
+// If no matching anime is found, an empty AnilistItem and potentially an error are returned.
+//
+// id: The ID of the anime to search for.
+//
+// Returns:
+// - AnilistItem: A struct containing the Anilist URL, score, and other data for the found anime.
+// - error: Any errors encountered during the search.
+func GetAnilistItemByID(id int) (AnilistItem, error) {
+	variables := map[string]interface{}{
+		"id": id,
+	}
+
+	media, err := fetchAnilistData(AnimeSearchQueryByID, variables)
+	if err != nil {
+		return AnilistItem{}, err
+	}
+
+	if media.ID != 0 {
+		url := fmt.Sprintf(AnimeURLFormat, media.ID)
+		score := media.AverageScore
+		return AnilistItem{
+			ID:       media.ID,
+			URL:      url,
+			Score:    score,
+			Episodes: media.Episodes,
+		}, nil
+	}
+
+	return AnilistItem{}, nil
 }
 
 // FindAnilistItem retrieves the Anilist URL and average score for a given anime title.

@@ -52,6 +52,13 @@ func TestGetFollowingNames(t *testing.T) {
 	}
 }
 
+func TestGetAnilistItemByID(t *testing.T) {
+	result, _ := GetAnilistItemByID(161645)
+	if result.URL != "https://anilist.co/anime/161645" {
+		t.Errorf("expected URL https://anilist.co/anime/161645 but got %v", result.URL)
+	}
+}
+
 func TestGetUpdates(t *testing.T) {
 	result, _ := GetUpdates("Ithilias", MediaTypeAnime)
 	if len(result) == 0 {
