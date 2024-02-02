@@ -658,6 +658,10 @@ func sendRequest(url, query string, variables map[string]interface{}, accessToke
 		return nil, err
 	}
 
+	if resp.StatusCode < http.StatusOK || resp.StatusCode > http.StatusIMUsed {
+		return nil, fmt.Errorf("request failed with status code %d: %s", resp.StatusCode, string(body))
+	}
+
 	var result Response
 	err = json.Unmarshal(body, &result)
 	if err != nil {
