@@ -658,7 +658,7 @@ func sendRequest(url, query string, variables map[string]interface{}, accessToke
 		return nil, err
 	}
 
-	if resp.StatusCode < http.StatusOK || resp.StatusCode > http.StatusIMUsed {
+	if (resp.StatusCode < http.StatusOK || resp.StatusCode > http.StatusIMUsed) && resp.StatusCode != http.StatusNotFound {
 		return nil, fmt.Errorf("request failed with status code %d: %s", resp.StatusCode, string(body))
 	}
 
