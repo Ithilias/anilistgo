@@ -17,6 +17,7 @@ const (
 	PerPage          = 20
 	MediaTypeAnime   = "ANIME"
 	MediaTypeManga   = "MANGA"
+	Timeout          = 5
 
 	AnimeSearchQueryWithSeason = `
     query ($title: String, $season: MediaSeason, $seasonYear: Int) {
@@ -642,7 +643,11 @@ func sendRequest(url, query string, variables map[string]interface{}, accessToke
 		req.Header.Set("Authorization", "Bearer "+accessToken)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{
+		Timeout: time.Second * Timeout,
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
