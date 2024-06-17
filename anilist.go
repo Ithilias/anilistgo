@@ -110,31 +110,60 @@ const (
 
 	UpdatesQuery = `
     query ($userName: String, $type: MediaType) {
-		MediaListCollection(userName: $userName, type: $type) {
-			lists {
-				entries {
-					mediaId
-					media {
-						title {
-							english
-							romaji
-						}
+        MediaListCollection(userName: $userName, type: $type) {
+            lists {
+                entries {
+                    mediaId
+                    media {
+                        title {
+                            english
+                            romaji
+                        }
                         coverImage {
                             extraLarge
                         }
-						episodes
-						chapters
-						volumes
-					}
-					score (format: POINT_100)
-					progress
-					progressVolumes
-					status
-					updatedAt
-				}
-			}
-		}
-	}
+                        episodes
+                        chapters
+                        volumes
+                    }
+                    score (format: POINT_100)
+                    progress
+                    progressVolumes
+                    status
+                    updatedAt
+                }
+            }
+        }
+    }
+    `
+
+	LimitedUpdatesQuery = `
+    query ($userName: String, $type: MediaType, $chunk: Int, $perChunk: Int) {
+        MediaListCollection(userName: $userName, type: $type, chunk: $chunk, perChunk: $perChunk, sort: UPDATED_TIME_DESC) {
+            lists {
+                entries {
+                    mediaId
+                    media {
+                        title {
+                            english
+                            romaji
+                        }
+                        coverImage {
+                            extraLarge
+                        }
+                        episodes
+                        chapters
+                        volumes
+                    }
+                    score (format: POINT_100)
+                    progress
+                    progressVolumes
+                    status
+                    updatedAt
+                }
+            }
+        }
+    }
     `
 
 	UpdateProgressQuery = `
@@ -421,7 +450,7 @@ func GetFollowingNames(username string) ([]string, error) {
 // Constants:
 // - MediaTypeAnime: Represents the "ANIME" type of media.
 // - MediaTypeManga: Represents the "MANGA" type of media.
-func GetUpdates(username string, mediaType string) ([]Update, error) {
+func GetUpdates(username string, mediaType string, chunk *int, perChunk *int) ([]Update, error) {
 	// Check if the provided mediaType is valid
 	if mediaType != MediaTypeAnime && mediaType != MediaTypeManga {
 		return nil, fmt.Errorf("invalid mediaType provided: %s. Accepts only %s or %s", mediaType, MediaTypeAnime, MediaTypeManga)
@@ -433,7 +462,15 @@ func GetUpdates(username string, mediaType string) ([]Update, error) {
 		"type":     mediaType,
 	}
 
-	mediaListCollection, err := fetchUpdatesData(UpdatesQuery, variables)
+	var query = UpdatesQuery
+	// Only add chunk and perChunk to variables if they are not nil
+	if chunk != nil && perChunk != nil {
+		variables["chunk"] = *chunk
+		variables["perChunk"] = *perChunk
+		query = LimitedUpdatesQuery
+	}
+
+	mediaListCollection, err := fetchUpdatesData(query, variables)
 	if err != nil {
 		return nil, err
 	}

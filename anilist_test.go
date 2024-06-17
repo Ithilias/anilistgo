@@ -60,7 +60,7 @@ func TestGetAnilistItemByID(t *testing.T) {
 }
 
 func TestGetUpdates(t *testing.T) {
-	result, _ := GetUpdates("Ithilias", MediaTypeAnime)
+	result, _ := GetUpdates("Ithilias", MediaTypeAnime, nil, nil)
 	if len(result) == 0 {
 		t.Errorf("expected result but got empty array %v", result)
 	}
