@@ -17,7 +17,7 @@ const (
 	PerPage          = 20
 	MediaTypeAnime   = "ANIME"
 	MediaTypeManga   = "MANGA"
-	Timeout          = 5
+	Timeout          = 30
 
 	AnimeSearchQueryWithSeason = `
     query ($title: String, $season: MediaSeason, $seasonYear: Int) {
