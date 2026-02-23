@@ -701,7 +701,18 @@ func sendRequest(url, query string, variables map[string]interface{}, accessToke
 	}
 
 	if (resp.StatusCode < http.StatusOK || resp.StatusCode > http.StatusIMUsed) && resp.StatusCode != http.StatusNotFound {
-		return nil, fmt.Errorf("request failed with status code %d: %s", resp.StatusCode, string(body))
+		// Format headers into error message
+		var headerStr strings.Builder
+		for key, values := range resp.Header {
+			headerStr.WriteString(fmt.Sprintf("%s: %s\n", key, strings.Join(values, ", ")))
+		}
+
+		return nil, fmt.Errorf(
+			"request failed with status code %d\nHeaders:\n%s\nBody: %s",
+			resp.StatusCode,
+			headerStr.String(),
+			string(body),
+		)
 	}
 
 	var result Response
