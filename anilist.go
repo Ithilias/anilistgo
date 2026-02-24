@@ -701,16 +701,12 @@ func sendRequest(url, query string, variables map[string]interface{}, accessToke
 	}
 
 	if (resp.StatusCode < http.StatusOK || resp.StatusCode > http.StatusIMUsed) && resp.StatusCode != http.StatusNotFound {
-		// Format headers into error message
-		var headerStr strings.Builder
-		for key, values := range resp.Header {
-			headerStr.WriteString(fmt.Sprintf("%s: %s\n", key, strings.Join(values, ", ")))
-		}
-
 		return nil, fmt.Errorf(
-			"request failed with status code %d\nHeaders:\n%s\nBody: %s",
+			"request failed with status code %d\nX-RateLimit-Limit: %s\nX-RateLimit-Remaining: %s\nRetry-After: %s\nBody: %s",
 			resp.StatusCode,
-			headerStr.String(),
+			resp.Header.Get("X-RateLimit-Limit"),
+			resp.Header.Get("X-RateLimit-Remaining"),
+			resp.Header.Get("Retry-After"),
 			string(body),
 		)
 	}
