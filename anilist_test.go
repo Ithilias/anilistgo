@@ -117,8 +117,32 @@ func TestSendRequestReturnsHTTPErrorForNonJSONBody(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected HTTP error")
 	}
-	if !strings.Contains(err.Error(), "status code 429") {
+	if !strings.Contains(err.Error(), "status 429") {
 		t.Fatalf("expected status code in error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "X-RateLimit-Limit=") {
+		t.Fatalf("expected empty rate-limit headers to be omitted, got %v", err)
+	}
+}
+
+func TestSendRequestIncludesRateLimitHeadersWhenPresent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Limit", "90")
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("Retry-After", "60")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte("rate limited"))
+	}))
+	defer server.Close()
+
+	_, err := sendRequest(server.URL, "query", nil, "")
+	if err == nil {
+		t.Fatal("expected HTTP error")
+	}
+	for _, expected := range []string{"status 429", "X-RateLimit-Limit=90", "X-RateLimit-Remaining=0", "Retry-After=60", "body=rate limited"} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Fatalf("expected %q in error, got %v", expected, err)
+		}
 	}
 }
 

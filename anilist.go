@@ -20,6 +20,7 @@ const (
 	MediaTypeAnime   = "ANIME"
 	MediaTypeManga   = "MANGA"
 	Timeout          = 30
+	MaxErrorBodySize = 500
 
 	AnimeSearchQueryWithSeason = `
     query ($title: String, $season: MediaSeason, $seasonYear: Int) {
@@ -790,14 +791,23 @@ func sendRequestContext(ctx context.Context, url, query string, variables map[st
 }
 
 func formatHTTPError(resp *http.Response, body []byte) error {
-	return fmt.Errorf(
-		"request failed with status code %d\nX-RateLimit-Limit: %s\nX-RateLimit-Remaining: %s\nRetry-After: %s\nBody: %s",
-		resp.StatusCode,
-		resp.Header.Get("X-RateLimit-Limit"),
-		resp.Header.Get("X-RateLimit-Remaining"),
-		resp.Header.Get("Retry-After"),
-		string(body),
-	)
+	parts := []string{fmt.Sprintf("anilist request failed: status %d", resp.StatusCode)}
+
+	for _, header := range []string{"X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After"} {
+		if value := resp.Header.Get(header); value != "" {
+			parts = append(parts, fmt.Sprintf("%s=%s", header, value))
+		}
+	}
+
+	bodyText := strings.TrimSpace(string(body))
+	if bodyText != "" {
+		if len(bodyText) > MaxErrorBodySize {
+			bodyText = bodyText[:MaxErrorBodySize] + "..."
+		}
+		parts = append(parts, "body="+bodyText)
+	}
+
+	return errors.New(strings.Join(parts, "; "))
 }
 
 func formatGraphQLErrors(graphQLErrors []GraphQLError) error {
