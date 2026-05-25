@@ -2,7 +2,9 @@ package anilistgo
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -181,10 +183,20 @@ var (
 	AnimeSeasons          = []string{"WINTER", "SPRING", "SUMMER", "FALL", "WINTER"}
 	BeginningSeasonMonths = []int{1, 4, 7, 10}
 	EndSeasonMonths       = []int{3, 6, 9, 12}
+	baseAPIURL            = BaseAPIURL
+	httpClient            = &http.Client{Timeout: time.Second * Timeout}
 )
 
 type AuthenticatedAPI struct {
 	AccessToken string
+}
+
+type GraphQLError struct {
+	Message    string `json:"message"`
+	Status     int    `json:"status"`
+	Extensions struct {
+		Status int `json:"status"`
+	} `json:"extensions"`
 }
 
 type MediaTitle struct {
@@ -212,11 +224,8 @@ type Response struct {
 		MediaListCollection *MediaListCollection `json:"MediaListCollection"`
 		User                UserInfo             `json:"User,omitempty"`
 		Page                *PageData            `json:"Page,omitempty"`
-		Errors              []struct {
-			Message string `json:"message"`
-			Status  int    `json:"status"`
-		} `json:"errors,omitempty"`
 	} `json:"data"`
+	Errors []GraphQLError `json:"errors,omitempty"`
 }
 
 type MediaList struct {
@@ -307,11 +316,17 @@ func NewAuthenticatedAPI(accessToken string) *AuthenticatedAPI {
 // - AnilistItem: A struct containing the Anilist URL, score, and other data for the found anime.
 // - error: Any errors encountered during the search.
 func GetAnilistItemByID(id int) (AnilistItem, error) {
+	return GetAnilistItemByIDContext(context.Background(), id)
+}
+
+// GetAnilistItemByIDContext retrieves an AniList item by ID using ctx for
+// request cancellation and deadlines.
+func GetAnilistItemByIDContext(ctx context.Context, id int) (AnilistItem, error) {
 	variables := map[string]interface{}{
 		"id": id,
 	}
 
-	media, err := fetchAnilistData(AnimeSearchQueryByID, variables)
+	media, err := fetchAnilistDataContext(ctx, AnimeSearchQueryByID, variables)
 	if err != nil {
 		return AnilistItem{}, err
 	}
@@ -344,6 +359,12 @@ func GetAnilistItemByID(id int) (AnilistItem, error) {
 // - AnilistItem: A struct containing the Anilist URL and score for the found anime.
 // - error: Any errors encountered during the search.
 func FindAnilistItem(title string, firstEpisodeDate *time.Time, offset int) (AnilistItem, error) {
+	return FindAnilistItemContext(context.Background(), title, firstEpisodeDate, offset)
+}
+
+// FindAnilistItemContext finds an AniList item like FindAnilistItem, using ctx
+// for request cancellation and deadlines.
+func FindAnilistItemContext(ctx context.Context, title string, firstEpisodeDate *time.Time, offset int) (AnilistItem, error) {
 	var query string
 	var variables map[string]interface{}
 
@@ -362,7 +383,7 @@ func FindAnilistItem(title string, firstEpisodeDate *time.Time, offset int) (Ani
 		}
 	}
 
-	media, err := fetchAnilistData(query, variables)
+	media, err := fetchAnilistDataContext(ctx, query, variables)
 	if err != nil {
 		return AnilistItem{}, err
 	}
@@ -377,9 +398,9 @@ func FindAnilistItem(title string, firstEpisodeDate *time.Time, offset int) (Ani
 			Episodes: media.Episodes,
 		}, nil
 	} else if firstEpisodeDate != nil && isMonthInList(*firstEpisodeDate, BeginningSeasonMonths) && offset == 0 {
-		return FindAnilistItem(title, firstEpisodeDate, -1)
+		return FindAnilistItemContext(ctx, title, firstEpisodeDate, -1)
 	} else if firstEpisodeDate != nil && isMonthInList(*firstEpisodeDate, EndSeasonMonths) && offset == 0 {
-		return FindAnilistItem(title, firstEpisodeDate, 1)
+		return FindAnilistItemContext(ctx, title, firstEpisodeDate, 1)
 	}
 
 	return AnilistItem{}, nil
@@ -396,11 +417,17 @@ func FindAnilistItem(title string, firstEpisodeDate *time.Time, offset int) (Ani
 // - A slice of strings, where each string is the name of a user that the provided user is following.
 // - An error if there's any issue fetching the data. If no error is returned, the function was successful.
 func GetFollowingNames(username string) ([]string, error) {
+	return GetFollowingNamesContext(context.Background(), username)
+}
+
+// GetFollowingNamesContext retrieves followed usernames like GetFollowingNames,
+// using ctx for request cancellation and deadlines.
+func GetFollowingNamesContext(ctx context.Context, username string) ([]string, error) {
 	variables := map[string]interface{}{
 		"name": username,
 	}
 
-	userID, err := fetchUserID(UserQuery, variables)
+	userID, err := fetchUserIDContext(ctx, UserQuery, variables)
 	if err != nil {
 		return nil, err
 	}
@@ -416,7 +443,7 @@ func GetFollowingNames(username string) ([]string, error) {
 			"perPage": PerPage,
 		}
 
-		pageData, err := fetchFollowingData(FollowingQuery, variables)
+		pageData, err := fetchFollowingDataContext(ctx, FollowingQuery, variables)
 		if err != nil {
 			return nil, err
 		}
@@ -451,6 +478,12 @@ func GetFollowingNames(username string) ([]string, error) {
 // - MediaTypeAnime: Represents the "ANIME" type of media.
 // - MediaTypeManga: Represents the "MANGA" type of media.
 func GetUpdates(username string, mediaType string, chunk *int, perChunk *int) ([]Update, error) {
+	return GetUpdatesContext(context.Background(), username, mediaType, chunk, perChunk)
+}
+
+// GetUpdatesContext retrieves media updates like GetUpdates, using ctx for
+// request cancellation and deadlines.
+func GetUpdatesContext(ctx context.Context, username string, mediaType string, chunk *int, perChunk *int) ([]Update, error) {
 	// Check if the provided mediaType is valid
 	if mediaType != MediaTypeAnime && mediaType != MediaTypeManga {
 		return nil, fmt.Errorf("invalid mediaType provided: %s. Accepts only %s or %s", mediaType, MediaTypeAnime, MediaTypeManga)
@@ -470,7 +503,7 @@ func GetUpdates(username string, mediaType string, chunk *int, perChunk *int) ([
 		query = LimitedUpdatesQuery
 	}
 
-	mediaListCollection, err := fetchUpdatesData(query, variables)
+	mediaListCollection, err := fetchUpdatesDataContext(ctx, query, variables)
 	if err != nil {
 		return nil, err
 	}
@@ -543,13 +576,19 @@ func GetUpdates(username string, mediaType string, chunk *int, perChunk *int) ([
 //	    log.Fatal(err)
 //	}
 func (api *AuthenticatedAPI) UpdateProgress(mediaID int, progress int, status string) error {
+	return api.UpdateProgressContext(context.Background(), mediaID, progress, status)
+}
+
+// UpdateProgressContext updates progress like UpdateProgress, using ctx for
+// request cancellation and deadlines.
+func (api *AuthenticatedAPI) UpdateProgressContext(ctx context.Context, mediaID int, progress int, status string) error {
 	variables := map[string]interface{}{
 		"mediaId":  mediaID,
 		"progress": progress,
 		"status":   status,
 	}
 
-	_, err := sendRequest(BaseAPIURL, UpdateProgressQuery, variables, api.AccessToken)
+	_, err := sendRequestContext(ctx, baseAPIURL, UpdateProgressQuery, variables, api.AccessToken)
 	if err != nil {
 		return err
 	}
@@ -581,12 +620,18 @@ func (api *AuthenticatedAPI) UpdateProgress(mediaID int, progress int, status st
 //	}
 //	fmt.Printf("The progress for mediaID 12345 for exampleUser is: %d\n", progress)
 func GetProgress(userName string, mediaID int) (int, error) {
+	return GetProgressContext(context.Background(), userName, mediaID)
+}
+
+// GetProgressContext retrieves progress like GetProgress, using ctx for request
+// cancellation and deadlines.
+func GetProgressContext(ctx context.Context, userName string, mediaID int) (int, error) {
 	variables := map[string]interface{}{
 		"mediaId":  mediaID,
 		"userName": userName,
 	}
 
-	progress, err := fetchProgress(ProgressQuery, variables)
+	progress, err := fetchProgressContext(ctx, ProgressQuery, variables)
 	if err != nil {
 		return 0, err
 	}
@@ -609,7 +654,11 @@ func computeSeason(firstEpisodeDate time.Time, offset int) (string, int) {
 }
 
 func fetchAnilistData(query string, variables map[string]interface{}) (Media, error) {
-	data, err := sendRequest(BaseAPIURL, query, variables, "")
+	return fetchAnilistDataContext(context.Background(), query, variables)
+}
+
+func fetchAnilistDataContext(ctx context.Context, query string, variables map[string]interface{}) (Media, error) {
+	data, err := sendRequestContext(ctx, baseAPIURL, query, variables, "")
 	if err != nil {
 		return Media{}, err
 	}
@@ -617,7 +666,11 @@ func fetchAnilistData(query string, variables map[string]interface{}) (Media, er
 }
 
 func fetchProgress(query string, variables map[string]interface{}) (int, error) {
-	data, err := sendRequest(BaseAPIURL, query, variables, "")
+	return fetchProgressContext(context.Background(), query, variables)
+}
+
+func fetchProgressContext(ctx context.Context, query string, variables map[string]interface{}) (int, error) {
+	data, err := sendRequestContext(ctx, baseAPIURL, query, variables, "")
 	if err != nil {
 		return 0, err
 	}
@@ -625,27 +678,48 @@ func fetchProgress(query string, variables map[string]interface{}) (int, error) 
 }
 
 func fetchUserID(query string, variables map[string]interface{}) (int, error) {
-	data, err := sendRequest(BaseAPIURL, query, variables, "")
+	return fetchUserIDContext(context.Background(), query, variables)
+}
+
+func fetchUserIDContext(ctx context.Context, query string, variables map[string]interface{}) (int, error) {
+	data, err := sendRequestContext(ctx, baseAPIURL, query, variables, "")
 	if err != nil {
 		return 0, err
+	}
+	if data.Data.User.ID == 0 {
+		return 0, errors.New("anilist response did not include user data")
 	}
 
 	return data.Data.User.ID, nil
 }
 
 func fetchFollowingData(query string, variables map[string]interface{}) (*PageData, error) {
-	data, err := sendRequest(BaseAPIURL, query, variables, "")
+	return fetchFollowingDataContext(context.Background(), query, variables)
+}
+
+func fetchFollowingDataContext(ctx context.Context, query string, variables map[string]interface{}) (*PageData, error) {
+	data, err := sendRequestContext(ctx, baseAPIURL, query, variables, "")
 	if err != nil {
 		return nil, err
+	}
+	if data.Data.Page == nil {
+		return nil, errors.New("anilist response did not include following page data")
 	}
 
 	return data.Data.Page, nil
 }
 
 func fetchUpdatesData(query string, variables map[string]interface{}) (*MediaListCollection, error) {
-	data, err := sendRequest(BaseAPIURL, query, variables, "")
+	return fetchUpdatesDataContext(context.Background(), query, variables)
+}
+
+func fetchUpdatesDataContext(ctx context.Context, query string, variables map[string]interface{}) (*MediaListCollection, error) {
+	data, err := sendRequestContext(ctx, baseAPIURL, query, variables, "")
 	if err != nil {
 		return nil, err
+	}
+	if data.Data.MediaListCollection == nil {
+		return nil, errors.New("anilist response did not include media list collection")
 	}
 
 	return data.Data.MediaListCollection, nil
@@ -661,6 +735,10 @@ func isMonthInList(date time.Time, list []int) bool {
 }
 
 func sendRequest(url, query string, variables map[string]interface{}, accessToken string) (*Response, error) {
+	return sendRequestContext(context.Background(), url, query, variables, accessToken)
+}
+
+func sendRequestContext(ctx context.Context, url, query string, variables map[string]interface{}, accessToken string) (*Response, error) {
 	reqBody, err := json.Marshal(map[string]interface{}{
 		"query":     query,
 		"variables": variables,
@@ -669,7 +747,7 @@ func sendRequest(url, query string, variables map[string]interface{}, accessToke
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(reqBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(reqBody))
 	if err != nil {
 		return nil, err
 	}
@@ -680,42 +758,61 @@ func sendRequest(url, query string, variables map[string]interface{}, accessToke
 		req.Header.Set("Authorization", "Bearer "+accessToken)
 	}
 
-	client := &http.Client{
-		Timeout: time.Second * Timeout,
-	}
-
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			panic(err)
-		}
-	}(resp.Body)
+	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
 
-	if (resp.StatusCode < http.StatusOK || resp.StatusCode > http.StatusIMUsed) && resp.StatusCode != http.StatusNotFound {
-		return nil, fmt.Errorf(
-			"request failed with status code %d\nX-RateLimit-Limit: %s\nX-RateLimit-Remaining: %s\nRetry-After: %s\nBody: %s",
-			resp.StatusCode,
-			resp.Header.Get("X-RateLimit-Limit"),
-			resp.Header.Get("X-RateLimit-Remaining"),
-			resp.Header.Get("Retry-After"),
-			string(body),
-		)
-	}
-
 	var result Response
 	err = json.Unmarshal(body, &result)
 	if err != nil {
+		if resp.StatusCode < http.StatusOK || resp.StatusCode > http.StatusIMUsed {
+			return nil, formatHTTPError(resp, body)
+		}
 		return nil, err
 	}
 
+	if len(result.Errors) > 0 {
+		return nil, formatGraphQLErrors(result.Errors)
+	}
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode > http.StatusIMUsed {
+		return nil, formatHTTPError(resp, body)
+	}
+
 	return &result, nil
+}
+
+func formatHTTPError(resp *http.Response, body []byte) error {
+	return fmt.Errorf(
+		"request failed with status code %d\nX-RateLimit-Limit: %s\nX-RateLimit-Remaining: %s\nRetry-After: %s\nBody: %s",
+		resp.StatusCode,
+		resp.Header.Get("X-RateLimit-Limit"),
+		resp.Header.Get("X-RateLimit-Remaining"),
+		resp.Header.Get("Retry-After"),
+		string(body),
+	)
+}
+
+func formatGraphQLErrors(graphQLErrors []GraphQLError) error {
+	messages := make([]string, 0, len(graphQLErrors))
+	for _, graphQLError := range graphQLErrors {
+		message := graphQLError.Message
+		status := graphQLError.Status
+		if status == 0 {
+			status = graphQLError.Extensions.Status
+		}
+		if status != 0 {
+			message = fmt.Sprintf("%s (status %d)", message, status)
+		}
+		messages = append(messages, message)
+	}
+
+	return fmt.Errorf("anilist graphql error: %s", strings.Join(messages, "; "))
 }

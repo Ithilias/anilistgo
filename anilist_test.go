@@ -1,11 +1,19 @@
 package anilistgo
 
 import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestFindAnilistItem(t *testing.T) {
+	skipIntegrationTest(t)
+
 	firstEpisodeDateFirstSeasonAoT, _ := time.Parse("2006-01-02", "2013-04-07")
 	firstEpisodeDateLastSeasonAoT, _ := time.Parse("2006-01-02", "2020-12-07")
 	firstEpisodeDate21SeasonOnePiece, _ := time.Parse("2006-01-02", "2021-10-10")
@@ -46,22 +54,109 @@ func TestFindAnilistItem(t *testing.T) {
 }
 
 func TestGetFollowingNames(t *testing.T) {
-	result, _ := GetFollowingNames("Ithilias")
+	skipIntegrationTest(t)
+
+	result, err := GetFollowingNames("Ithilias")
+	if err != nil {
+		t.Fatalf("expected no error but got: %v", err)
+	}
 	if len(result) == 0 {
 		t.Errorf("expected result but got empty array %v", result)
 	}
 }
 
 func TestGetAnilistItemByID(t *testing.T) {
-	result, _ := GetAnilistItemByID(161645)
+	skipIntegrationTest(t)
+
+	result, err := GetAnilistItemByID(161645)
+	if err != nil {
+		t.Fatalf("expected no error but got: %v", err)
+	}
 	if result.URL != "https://anilist.co/anime/161645" {
 		t.Errorf("expected URL https://anilist.co/anime/161645 but got %v", result.URL)
 	}
 }
 
 func TestGetUpdates(t *testing.T) {
-	result, _ := GetUpdates("Ithilias", MediaTypeAnime, nil, nil)
+	skipIntegrationTest(t)
+
+	result, err := GetUpdates("Ithilias", MediaTypeAnime, nil, nil)
+	if err != nil {
+		t.Fatalf("expected no error but got: %v", err)
+	}
 	if len(result) == 0 {
 		t.Errorf("expected result but got empty array %v", result)
+	}
+}
+
+func TestSendRequestReturnsGraphQLError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"errors":[{"message":"not found","extensions":{"status":404}}]}`))
+	}))
+	defer server.Close()
+
+	_, err := sendRequest(server.URL, "query", nil, "")
+	if err == nil {
+		t.Fatal("expected GraphQL error")
+	}
+	if !strings.Contains(err.Error(), "not found (status 404)") {
+		t.Fatalf("expected formatted GraphQL error, got %v", err)
+	}
+}
+
+func TestSendRequestReturnsHTTPErrorForNonJSONBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte("rate limited"))
+	}))
+	defer server.Close()
+
+	_, err := sendRequest(server.URL, "query", nil, "")
+	if err == nil {
+		t.Fatal("expected HTTP error")
+	}
+	if !strings.Contains(err.Error(), "status code 429") {
+		t.Fatalf("expected status code in error, got %v", err)
+	}
+}
+
+func TestFetchUpdatesDataRequiresCollection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{}}`))
+	}))
+	defer server.Close()
+
+	originalBaseAPIURL := baseAPIURL
+	baseAPIURL = server.URL
+	t.Cleanup(func() {
+		baseAPIURL = originalBaseAPIURL
+	})
+
+	_, err := fetchUpdatesData("query", nil)
+	if err == nil {
+		t.Fatal("expected missing collection error")
+	}
+	if !strings.Contains(err.Error(), "media list collection") {
+		t.Fatalf("expected missing collection error, got %v", err)
+	}
+}
+
+func TestSendRequestContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := sendRequestContext(ctx, "http://example.invalid", "query", nil, "")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func skipIntegrationTest(t *testing.T) {
+	t.Helper()
+	if os.Getenv("ANILISTGO_INTEGRATION") != "1" {
+		t.Skip("set ANILISTGO_INTEGRATION=1 to run live AniList integration tests")
 	}
 }
