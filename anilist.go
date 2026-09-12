@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,6 +23,17 @@ const (
 	MediaTypeManga   = "MANGA"
 	Timeout          = 30
 	MaxErrorBodySize = 500
+
+	// MaxRetries is how many extra attempts a request gets after AniList
+	// transiently refuses it.
+	MaxRetries = 2
+	// RetryBaseDelay is the wait before the first retry; it doubles thereafter.
+	RetryBaseDelay = 500 * time.Millisecond
+	// MaxRetryDelay caps how long a single retry waits, keeping a library call
+	// short enough that the caller stays in charge of longer waits.
+	MaxRetryDelay = 5 * time.Second
+	// RetryJitter is the fraction by which a retry wait is randomly lengthened.
+	RetryJitter = 0.3
 
 	AnimeSearchQueryWithSeason = `
     query ($title: String, $season: MediaSeason, $seasonYear: Int) {
@@ -811,6 +823,30 @@ func sendRequestContext(ctx context.Context, url, query string, variables map[st
 		return nil, err
 	}
 
+	for attempt := 0; ; attempt++ {
+		result, err := doRequestContext(ctx, url, reqBody, accessToken)
+		if err == nil {
+			return result, nil
+		}
+
+		if attempt >= MaxRetries {
+			return nil, err
+		}
+
+		delay, retryable := retryDelay(err, attempt)
+		if !retryable {
+			return nil, err
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+}
+
+func doRequestContext(ctx context.Context, url string, reqBody []byte, accessToken string) (*Response, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(reqBody))
 	if err != nil {
 		return nil, err
@@ -855,6 +891,41 @@ func sendRequestContext(ctx context.Context, url, query string, variables map[st
 	}
 
 	return &result, nil
+}
+
+// retryDelay reports how long to wait before retrying err, and whether retrying
+// is worthwhile at all.
+//
+// Only AniList's own transient refusals are retried. Its edge rejects a share of
+// otherwise valid requests, so a request that just failed is quite likely to
+// succeed moments later; without this, a caller that issues several requests per
+// cycle sees a per-request failure rate compound into a much higher cycle
+// failure rate.
+//
+// A Retry-After longer than MaxRetryDelay is not slept through: waiting that
+// long belongs to the caller, whose own backoff can afford it without stalling a
+// library call.
+func retryDelay(err error, attempt int) (time.Duration, bool) {
+	var apiError *APIError
+	if !errors.As(err, &apiError) {
+		return 0, false
+	}
+	if apiError.StatusCode != http.StatusTooManyRequests && apiError.StatusCode < http.StatusInternalServerError {
+		return 0, false
+	}
+
+	if apiError.RetryAfter > 0 {
+		if apiError.RetryAfter > MaxRetryDelay {
+			return 0, false
+		}
+		return apiError.RetryAfter, true
+	}
+
+	delay := min(RetryBaseDelay<<attempt, MaxRetryDelay)
+
+	// Jitter upward, so clients refused in the same instant do not retry in
+	// lockstep and collide again.
+	return delay + time.Duration(rand.Float64()*RetryJitter*float64(delay)), true
 }
 
 func newAPIError(resp *http.Response, body []byte) *APIError {

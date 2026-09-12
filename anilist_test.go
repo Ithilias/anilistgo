@@ -246,6 +246,147 @@ func TestParseRetryAfter(t *testing.T) {
 	}
 }
 
+func TestSendRequestRetriesTransientRefusals(t *testing.T) {
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests <= MaxRetries {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte("rate limited"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"User":{"id":7}}}`))
+	}))
+	defer server.Close()
+
+	result, err := sendRequest(server.URL, "query", nil, "")
+	if err != nil {
+		t.Fatalf("expected the retry to succeed, got %v", err)
+	}
+	if result.Data.User.ID != 7 {
+		t.Errorf("expected the retried response to be returned, got %+v", result.Data.User)
+	}
+	if requests != MaxRetries+1 {
+		t.Errorf("expected %d attempts, got %d", MaxRetries+1, requests)
+	}
+}
+
+func TestSendRequestRetriesServerErrors(t *testing.T) {
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	if _, err := sendRequest(server.URL, "query", nil, ""); err == nil {
+		t.Fatal("expected an error once the retries are exhausted")
+	}
+	if requests != MaxRetries+1 {
+		t.Errorf("expected %d attempts, got %d", MaxRetries+1, requests)
+	}
+}
+
+func TestSendRequestDoesNotRetryClientErrors(t *testing.T) {
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	if _, err := sendRequest(server.URL, "query", nil, ""); err == nil {
+		t.Fatal("expected an error")
+	}
+	if requests != 1 {
+		t.Errorf("expected a client error not to be retried, got %d attempts", requests)
+	}
+}
+
+// Waiting minutes belongs to the caller's backoff, not to a library call.
+func TestSendRequestDoesNotSleepThroughLongRetryAfter(t *testing.T) {
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Retry-After", "600")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	started := time.Now()
+	if _, err := sendRequest(server.URL, "query", nil, ""); err == nil {
+		t.Fatal("expected an error")
+	}
+	if requests != 1 {
+		t.Errorf("expected no retry for a long Retry-After, got %d attempts", requests)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Errorf("expected the call to return promptly, took %v", elapsed)
+	}
+}
+
+func TestSendRequestStopsRetryingWhenContextIsCancelled(t *testing.T) {
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := sendRequestContext(ctx, server.URL, "query", nil, "")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if requests > MaxRetries+1 {
+		t.Errorf("expected at most %d attempts, got %d", MaxRetries+1, requests)
+	}
+}
+
+func TestRetryDelay(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		attempt     int
+		wantRetry   bool
+		wantAtLeast time.Duration
+		wantAtMost  time.Duration
+	}{
+		{"plain error", errors.New("boom"), 0, false, 0, 0},
+		{"not found", &APIError{StatusCode: http.StatusNotFound}, 0, false, 0, 0},
+		{"rate limited", &APIError{StatusCode: http.StatusTooManyRequests}, 0, true, RetryBaseDelay, 2 * RetryBaseDelay},
+		{"rate limited, second attempt", &APIError{StatusCode: http.StatusTooManyRequests}, 1, true, 2 * RetryBaseDelay, 4 * RetryBaseDelay},
+		{"server error", &APIError{StatusCode: http.StatusInternalServerError}, 0, true, RetryBaseDelay, 2 * RetryBaseDelay},
+		{"graphql rate limit", &APIError{StatusCode: http.StatusTooManyRequests, FromGraphQL: true}, 0, true, RetryBaseDelay, 2 * RetryBaseDelay},
+		{"short Retry-After is honoured", &APIError{StatusCode: http.StatusTooManyRequests, RetryAfter: 2 * time.Second}, 0, true, 2 * time.Second, 2 * time.Second},
+		{"long Retry-After is left to the caller", &APIError{StatusCode: http.StatusTooManyRequests, RetryAfter: time.Minute}, 0, false, 0, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			delay, retryable := retryDelay(tt.err, tt.attempt)
+			if retryable != tt.wantRetry {
+				t.Fatalf("retryable = %v, want %v", retryable, tt.wantRetry)
+			}
+			if !tt.wantRetry {
+				return
+			}
+			if delay < tt.wantAtLeast || delay > tt.wantAtMost {
+				t.Errorf("delay = %v, want between %v and %v", delay, tt.wantAtLeast, tt.wantAtMost)
+			}
+			if delay > MaxRetryDelay+time.Duration(RetryJitter*float64(MaxRetryDelay)) {
+				t.Errorf("delay = %v exceeds the cap", delay)
+			}
+		})
+	}
+}
+
 func TestFetchUpdatesDataRequiresCollection(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
