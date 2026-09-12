@@ -104,6 +104,17 @@ func TestSendRequestReturnsGraphQLError(t *testing.T) {
 	if !strings.Contains(err.Error(), "not found (status 404)") {
 		t.Fatalf("expected formatted GraphQL error, got %v", err)
 	}
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *APIError, got %T", err)
+	}
+	if !apiErr.FromGraphQL {
+		t.Error("expected FromGraphQL to be set")
+	}
+	if apiErr.StatusCode != http.StatusNotFound {
+		t.Errorf("expected status 404 but got %d", apiErr.StatusCode)
+	}
 }
 
 func TestSendRequestReturnsHTTPErrorForNonJSONBody(t *testing.T) {
@@ -122,6 +133,23 @@ func TestSendRequestReturnsHTTPErrorForNonJSONBody(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "X-RateLimit-Limit=") {
 		t.Fatalf("expected empty rate-limit headers to be omitted, got %v", err)
+	}
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *APIError, got %T", err)
+	}
+	if apiErr.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("expected status 429 but got %d", apiErr.StatusCode)
+	}
+	if apiErr.RetryAfter != 0 {
+		t.Errorf("expected no Retry-After hint but got %v", apiErr.RetryAfter)
+	}
+	if apiErr.Limit != -1 || apiErr.Remaining != -1 {
+		t.Errorf("expected absent rate-limit headers to be -1, got %d/%d", apiErr.Limit, apiErr.Remaining)
+	}
+	if apiErr.Body != "rate limited" {
+		t.Errorf("expected body to be captured, got %q", apiErr.Body)
 	}
 }
 
@@ -143,6 +171,78 @@ func TestSendRequestIncludesRateLimitHeadersWhenPresent(t *testing.T) {
 		if !strings.Contains(err.Error(), expected) {
 			t.Fatalf("expected %q in error, got %v", expected, err)
 		}
+	}
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *APIError, got %T", err)
+	}
+	if apiErr.RetryAfter != time.Minute {
+		t.Errorf("expected a one minute Retry-After but got %v", apiErr.RetryAfter)
+	}
+	if apiErr.Limit != 90 || apiErr.Remaining != 0 {
+		t.Errorf("expected limit 90/remaining 0 but got %d/%d", apiErr.Limit, apiErr.Remaining)
+	}
+}
+
+// AniList reports rate limiting in the GraphQL payload as well as the status
+// line, but only the headers carry Retry-After, so the HTTP error must win.
+func TestSendRequestPrefersHTTPErrorOverGraphQLErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"errors":[{"message":"Too Many Requests","status":429}]}`))
+	}))
+	defer server.Close()
+
+	_, err := sendRequest(server.URL, "query", nil, "")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *APIError, got %T (%v)", err, err)
+	}
+	if apiErr.FromGraphQL {
+		t.Error("expected the HTTP error to take precedence")
+	}
+	if apiErr.RetryAfter != 30*time.Second {
+		t.Errorf("expected a 30s Retry-After but got %v", apiErr.RetryAfter)
+	}
+	if len(apiErr.GraphQLMessages) != 1 {
+		t.Fatalf("expected the GraphQL messages to be kept, got %v", apiErr.GraphQLMessages)
+	}
+	if !strings.Contains(err.Error(), "graphql=Too Many Requests (status 429)") {
+		t.Errorf("expected GraphQL messages in the error text, got %v", err)
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	httpDate := time.Now().UTC().Add(90 * time.Second).Format(http.TimeFormat)
+
+	tests := []struct {
+		name  string
+		value string
+		want  time.Duration
+	}{
+		{"absent", "", 0},
+		{"seconds", "45", 45 * time.Second},
+		{"padded seconds", " 45 ", 45 * time.Second},
+		{"zero", "0", 0},
+		{"negative", "-5", 0},
+		{"garbage", "soon", 0},
+		{"past http date", "Mon, 02 Jan 2006 15:04:05 GMT", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseRetryAfter(tt.value); got != tt.want {
+				t.Errorf("parseRetryAfter(%q) = %v, want %v", tt.value, got, tt.want)
+			}
+		})
+	}
+
+	// An absolute date resolves relative to now, so allow for clock drift.
+	if got := parseRetryAfter(httpDate); got < 80*time.Second || got > 90*time.Second {
+		t.Errorf("parseRetryAfter(%q) = %v, want roughly 90s", httpDate, got)
 	}
 }
 

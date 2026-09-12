@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -190,6 +191,68 @@ var (
 
 type AuthenticatedAPI struct {
 	AccessToken string
+}
+
+// APIError describes a failed AniList API call. It is returned whenever AniList
+// answers with a non-2xx status, or with a GraphQL errors array that carries a
+// status of its own. Callers can reach it with errors.As to react to specific
+// conditions, most usefully rate limiting:
+//
+//	var apiErr *anilistgo.APIError
+//	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusTooManyRequests {
+//	    time.Sleep(apiErr.RetryAfter)
+//	}
+type APIError struct {
+	// StatusCode is the status AniList reported: the HTTP status of a failed
+	// request, or the status carried in a GraphQL error when the HTTP request
+	// itself succeeded.
+	StatusCode int
+
+	// RetryAfter is how long AniList asked the caller to wait, taken from the
+	// Retry-After header. It is zero when AniList sent no such hint, which is
+	// the case for the 429s served by AniList's edge rather than its API.
+	RetryAfter time.Duration
+
+	// Limit and Remaining mirror the X-RateLimit-Limit and X-RateLimit-Remaining
+	// headers. Both are -1 when AniList omitted the header.
+	Limit     int
+	Remaining int
+
+	// Body is the response body, truncated to MaxErrorBodySize.
+	Body string
+
+	// GraphQLMessages holds the messages from a GraphQL errors array, if the
+	// response carried one.
+	GraphQLMessages []string
+
+	// FromGraphQL reports whether this error was raised by a GraphQL errors
+	// array on an otherwise successful HTTP response.
+	FromGraphQL bool
+}
+
+func (e *APIError) Error() string {
+	if e.FromGraphQL {
+		return "anilist graphql error: " + strings.Join(e.GraphQLMessages, "; ")
+	}
+
+	parts := []string{fmt.Sprintf("anilist request failed: status %d", e.StatusCode)}
+	if e.Limit >= 0 {
+		parts = append(parts, fmt.Sprintf("X-RateLimit-Limit=%d", e.Limit))
+	}
+	if e.Remaining >= 0 {
+		parts = append(parts, fmt.Sprintf("X-RateLimit-Remaining=%d", e.Remaining))
+	}
+	if e.RetryAfter > 0 {
+		parts = append(parts, fmt.Sprintf("Retry-After=%d", int(e.RetryAfter.Seconds())))
+	}
+	if len(e.GraphQLMessages) > 0 {
+		parts = append(parts, "graphql="+strings.Join(e.GraphQLMessages, "; "))
+	}
+	if e.Body != "" {
+		parts = append(parts, "body="+e.Body)
+	}
+
+	return strings.Join(parts, "; ")
 }
 
 type GraphQLError struct {
@@ -771,58 +834,117 @@ func sendRequestContext(ctx context.Context, url, query string, variables map[st
 	}
 
 	var result Response
-	err = json.Unmarshal(body, &result)
-	if err != nil {
-		if resp.StatusCode < http.StatusOK || resp.StatusCode > http.StatusIMUsed {
-			return nil, formatHTTPError(resp, body)
+	unmarshalErr := json.Unmarshal(body, &result)
+
+	// A failed status takes precedence over the GraphQL errors array: AniList
+	// reports rate limiting through both, but only the headers carry Retry-After.
+	if resp.StatusCode < http.StatusOK || resp.StatusCode > http.StatusIMUsed {
+		apiError := newAPIError(resp, body)
+		if unmarshalErr == nil && len(result.Errors) > 0 {
+			apiError.GraphQLMessages = graphQLMessages(result.Errors)
 		}
-		return nil, err
+		return nil, apiError
+	}
+
+	if unmarshalErr != nil {
+		return nil, unmarshalErr
 	}
 
 	if len(result.Errors) > 0 {
-		return nil, formatGraphQLErrors(result.Errors)
-	}
-
-	if resp.StatusCode < http.StatusOK || resp.StatusCode > http.StatusIMUsed {
-		return nil, formatHTTPError(resp, body)
+		return nil, newGraphQLAPIError(result.Errors)
 	}
 
 	return &result, nil
 }
 
-func formatHTTPError(resp *http.Response, body []byte) error {
-	parts := []string{fmt.Sprintf("anilist request failed: status %d", resp.StatusCode)}
-
-	for _, header := range []string{"X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After"} {
-		if value := resp.Header.Get(header); value != "" {
-			parts = append(parts, fmt.Sprintf("%s=%s", header, value))
-		}
-	}
-
+func newAPIError(resp *http.Response, body []byte) *APIError {
 	bodyText := strings.TrimSpace(string(body))
-	if bodyText != "" {
-		if len(bodyText) > MaxErrorBodySize {
-			bodyText = bodyText[:MaxErrorBodySize] + "..."
-		}
-		parts = append(parts, "body="+bodyText)
+	if len(bodyText) > MaxErrorBodySize {
+		bodyText = bodyText[:MaxErrorBodySize] + "..."
 	}
 
-	return errors.New(strings.Join(parts, "; "))
+	return &APIError{
+		StatusCode: resp.StatusCode,
+		RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
+		Limit:      parseRateLimitHeader(resp.Header.Get("X-RateLimit-Limit")),
+		Remaining:  parseRateLimitHeader(resp.Header.Get("X-RateLimit-Remaining")),
+		Body:       bodyText,
+	}
 }
 
-func formatGraphQLErrors(graphQLErrors []GraphQLError) error {
+// parseRetryAfter interprets a Retry-After header, which RFC 9110 allows to be
+// either a delay in seconds or an absolute HTTP date. It returns zero when the
+// header is absent or unparseable.
+func parseRetryAfter(value string) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+
+	if deadline, err := http.ParseTime(value); err == nil {
+		if delay := time.Until(deadline); delay > 0 {
+			return delay
+		}
+	}
+
+	return 0
+}
+
+// parseRateLimitHeader returns the header's integer value, or -1 when AniList
+// omitted the header or sent something unparseable.
+func parseRateLimitHeader(value string) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return -1
+	}
+	return parsed
+}
+
+func graphQLMessages(graphQLErrors []GraphQLError) []string {
 	messages := make([]string, 0, len(graphQLErrors))
 	for _, graphQLError := range graphQLErrors {
 		message := graphQLError.Message
-		status := graphQLError.Status
-		if status == 0 {
-			status = graphQLError.Extensions.Status
-		}
-		if status != 0 {
+		if status := graphQLErrorStatus(graphQLError); status != 0 {
 			message = fmt.Sprintf("%s (status %d)", message, status)
 		}
 		messages = append(messages, message)
 	}
 
-	return fmt.Errorf("anilist graphql error: %s", strings.Join(messages, "; "))
+	return messages
+}
+
+// graphQLErrorStatus returns the status AniList attached to a GraphQL error,
+// which it reports either at the top level or under extensions.
+func graphQLErrorStatus(graphQLError GraphQLError) int {
+	if graphQLError.Status != 0 {
+		return graphQLError.Status
+	}
+	return graphQLError.Extensions.Status
+}
+
+func newGraphQLAPIError(graphQLErrors []GraphQLError) *APIError {
+	apiError := &APIError{
+		Limit:           -1,
+		Remaining:       -1,
+		GraphQLMessages: graphQLMessages(graphQLErrors),
+		FromGraphQL:     true,
+	}
+
+	// AniList signals conditions such as rate limiting through the GraphQL
+	// payload even on a 200, so surface the first status it reports.
+	for _, graphQLError := range graphQLErrors {
+		if status := graphQLErrorStatus(graphQLError); status != 0 {
+			apiError.StatusCode = status
+			break
+		}
+	}
+
+	return apiError
 }
