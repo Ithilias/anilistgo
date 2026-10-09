@@ -462,10 +462,13 @@ func FindAnilistItemContext(ctx context.Context, title string, firstEpisodeDate 
 	}
 
 	media, err := fetchAnilistDataContext(ctx, query, variables)
-	if err != nil {
+	if err != nil && !isNotFound(err) {
 		return AnilistItem{}, err
 	}
 
+	// AniList answers a search without a match with 404. That is a miss, not a
+	// failure: it must reach the adjacent-season retry below, and the caller must
+	// see an empty item rather than an error.
 	if media.ID != 0 {
 		url := fmt.Sprintf(AnimeURLFormat, media.ID)
 		score := media.AverageScore
@@ -928,6 +931,13 @@ func retryDelay(err error, attempt int) (time.Duration, bool) {
 	// Jitter upward, so clients refused in the same instant do not retry in
 	// lockstep and collide again.
 	return delay + time.Duration(rand.Float64()*RetryJitter*float64(delay)), true
+}
+
+// isNotFound reports whether err is AniList's 404, which it uses for "nothing
+// matched" as well as for genuinely missing resources.
+func isNotFound(err error) bool {
+	var apiError *APIError
+	return errors.As(err, &apiError) && apiError.StatusCode == http.StatusNotFound
 }
 
 func newAPIError(resp *http.Response, body []byte) *APIError {

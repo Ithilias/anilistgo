@@ -121,6 +121,52 @@ func TestSendRequestReturnsGraphQLError(t *testing.T) {
 	}
 }
 
+func TestFindAnilistItemTreatsNotFoundAsMiss(t *testing.T) {
+	notFound := `{"errors":[{"message":"Not Found.","status":404}],"data":{"Media":null}}`
+	tests := []struct {
+		name         string
+		responses    []string
+		expectedURL  string
+		expectedHits int
+	}{
+		// April is a season boundary, so a miss retries the adjacent season.
+		{"retries adjacent season", []string{notFound, `{"data":{"Media":{"id":42}}}`}, "https://anilist.co/anime/42", 2},
+		{"no match anywhere", []string{notFound, notFound}, "", 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hits := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body := tt.responses[hits]
+				hits++
+				w.Header().Set("Content-Type", "application/json")
+				if strings.Contains(body, "Not Found") {
+					w.WriteHeader(http.StatusNotFound)
+				}
+				_, _ = w.Write([]byte(body))
+			}))
+			defer server.Close()
+
+			original := baseAPIURL
+			baseAPIURL = server.URL
+			defer func() { baseAPIURL = original }()
+
+			firstEpisodeDate := time.Date(2026, time.April, 5, 0, 0, 0, 0, time.UTC)
+			result, err := FindAnilistItem("Some Anime", &firstEpisodeDate, 0)
+			if err != nil {
+				t.Fatalf("expected a 404 to be a miss, got error %v", err)
+			}
+			if result.URL != tt.expectedURL {
+				t.Errorf("expected URL %q but got %q", tt.expectedURL, result.URL)
+			}
+			if hits != tt.expectedHits {
+				t.Errorf("expected %d requests but got %d", tt.expectedHits, hits)
+			}
+		})
+	}
+}
+
 func TestSendRequestReturnsHTTPErrorForNonJSONBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
