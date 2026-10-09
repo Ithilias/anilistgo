@@ -37,7 +37,7 @@ const (
 
 	AnimeSearchQueryWithSeason = `
     query ($title: String, $season: MediaSeason, $seasonYear: Int) {
-        Media (type: ANIME, search: $title, season: $season, seasonYear: $seasonYear) {
+        Media (type: ANIME, search: $title, season: $season, seasonYear: $seasonYear, format_not_in: [MOVIE, MUSIC]) {
             id
             title {
                 romaji
@@ -77,7 +77,7 @@ const (
 
 	AnimeSearchQuery = `
     query ($title: String) {
-        Media (type: ANIME, search: $title) {
+        Media (type: ANIME, search: $title, format_not_in: [MOVIE, MUSIC]) {
             id
             title {
                 romaji
@@ -423,7 +423,9 @@ func GetAnilistItemByIDContext(ctx context.Context, id int) (AnilistItem, error)
 
 // FindAnilistItem retrieves the Anilist URL and average score for a given anime title.
 // If a date for the first episode is provided, the function will also consider the season
-// in which the anime aired to refine the search. The function returns an AnilistItem containing
+// in which the anime aired to refine the search. Movies and music videos are excluded, since a
+// franchise film releasing in the same season can otherwise outrank the TV series it belongs to.
+// The function returns an AnilistItem containing
 // the URL and score. If no matching anime is found, an empty AnilistItem and potentially an error
 // are returned.
 //
