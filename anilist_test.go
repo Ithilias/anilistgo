@@ -17,6 +17,9 @@ func TestFindAnilistItem(t *testing.T) {
 	firstEpisodeDateFirstSeasonAoT, _ := time.Parse("2006-01-02", "2013-04-07")
 	firstEpisodeDateLastSeasonAoT, _ := time.Parse("2006-01-02", "2020-12-07")
 	firstEpisodeDate21SeasonOnePiece, _ := time.Parse("2006-01-02", "2021-10-10")
+	// Season 3 shares FALL 2026 with the movie The Late Lady's Treasure, which
+	// search ranks higher; the TV season must win.
+	firstEpisodeDateApothecaryS3, _ := time.Parse("2006-01-02", "2026-10-02")
 	tests := []struct {
 		title            string
 		firstEpisodeDate *time.Time
@@ -30,6 +33,7 @@ func TestFindAnilistItem(t *testing.T) {
 		{"Attack on Titan", &firstEpisodeDateLastSeasonAoT, 0, "https://anilist.co/anime/110277", 0, false, false},
 		{"One Piece", &firstEpisodeDate21SeasonOnePiece, 0, "", 0, true, false},
 		{"One Piece", nil, 0, "https://anilist.co/anime/21", 0, false, false},
+		{"The Apothecary Diaries", &firstEpisodeDateApothecaryS3, 0, "https://anilist.co/anime/195516", 0, false, false},
 	}
 
 	for _, tt := range tests {
